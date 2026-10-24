@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Module tìm kiếm hình ảnh bằng Google Lens"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Circle to Search Lens Sidebar Ability"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Circle Lens"
+    },
+    {
+      "name": "permission_internet_reason",
+      "value": "Cần truy cập Internet để upload ảnh lên Google Lens và tải kết quả tìm kiếm"
+    },
+    {
+      "name": "permission_network_reason",
+      "value": "Kiểm tra kết nối mạng trước khi gửi yêu cầu tìm kiếm"
+    }
+  ]
+}

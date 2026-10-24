@@ -1,0 +1,10 @@
+{
+  "src": [
+    "pages/Index",
+    "pages/CircleCropPage",
+    "pages/LensResultPage",
+    "pages/TextResultPage",
+    "pages/TranslateResultPage",
+    "pages/HistoryPage"
+  ]
+}
