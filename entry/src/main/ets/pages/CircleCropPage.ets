@@ -23,7 +23,6 @@ interface ModeChip {
 @Component
 struct CircleCropPage {
   @State private frozenPixelMap: image.PixelMap | null = null;
-  @State private isCapturing: boolean = true;
   @State private currentMode: string = Constants.MODE_SEARCH;
   @State private statusHint: string = '';
   @State private isPickingImage: boolean = false;
@@ -43,22 +42,19 @@ struct CircleCropPage {
     { mode: Constants.MODE_TRANSLATE, label: 'Dịch thuật', color: '#EA4335' }
   ];
 
-  async aboutToAppear(): Promise<void> {
+  aboutToAppear(): void {
     Logger.info('CircleCropPage: chuẩn bị ảnh nền...');
-    this.isCapturing = true;
 
     // Ảnh có thể đến từ bộ chọn vùng màn hình của hệ thống, ảnh được chia sẻ,
     // hoặc thư viện. App không tự đọc nội dung của app khác.
     const pending = AppStorage.get<image.PixelMap>(Constants.KEY_PENDING_PIXELMAP);
     if (pending) {
       this.frozenPixelMap = pending;
-      this.isCapturing = false;
       this.statusHint = 'Khoanh tròn vùng muốn xử lý';
       return;
     }
 
     this.frozenPixelMap = null;
-    this.isCapturing = false;
     this.statusHint = 'Chưa có ảnh — hãy chọn ảnh hoặc chạm notification để chọn vùng màn hình';
   }
 
@@ -71,16 +67,21 @@ struct CircleCropPage {
   }
 
   private async pickImage(): Promise<void> {
+    if (this.isPickingImage) {
+      return;
+    }
+
     this.isPickingImage = true;
     try {
       const options = new photoAccessHelper.PhotoSelectOptions();
       options.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
       options.maxSelectNumber = 1;
       const result = await new photoAccessHelper.PhotoViewPicker().select(options);
-      if (result.photoUris.length === 0) {
+      const uri: string | undefined = result.photoUris[0];
+      if (!uri) {
         return;
       }
-      const pixelMap = await ImageService.loadPixelMapFromUri(result.photoUris[0]);
+      const pixelMap = await ImageService.loadPixelMapFromUri(uri);
       const previous = this.frozenPixelMap;
       AppStorage.setOrCreate<image.PixelMap>(Constants.KEY_PENDING_PIXELMAP, pixelMap);
       AppStorage.setOrCreate<string>(Constants.KEY_IMAGE_SOURCE, Constants.SOURCE_GALLERY);
@@ -90,8 +91,8 @@ struct CircleCropPage {
         ImageService.releaseQuietly(previous);
       }
       this.statusHint = 'Khoanh tròn vùng muốn xử lý';
-    } catch (err) {
-      Logger.error('Chọn ảnh để crop thất bại: %{public}s', JSON.stringify(err));
+    } catch (error) {
+      Logger.error('Chọn ảnh để crop thất bại: %{public}s', String(error));
       this.statusHint = 'Không mở được thư viện ảnh, hãy thử lại';
     } finally {
       this.isPickingImage = false;
@@ -127,6 +128,10 @@ struct CircleCropPage {
       this.statusHint = 'Không có ảnh nền để xử lý';
       return;
     }
+    if (this.canvasWidth <= 0 || this.canvasHeight <= 0) {
+      this.statusHint = 'Khung chọn ảnh chưa sẵn sàng, hãy thử khoanh lại';
+      return;
+    }
 
     this.isProcessing = true;
     try {
@@ -145,7 +150,8 @@ struct CircleCropPage {
         this.resetStroke();
         return;
       }
-      Logger.info('Tọa độ vùng khoanh: %{public}s (mode=%{public}s)', JSON.stringify(box), this.currentMode);
+      Logger.info('Tọa độ vùng khoanh: x=%{public}f, y=%{public}f, w=%{public}f, h=%{public}f (mode=%{public}s)',
+        box.x, box.y, box.width, box.height, this.currentMode);
 
       // Cắt vùng khoanh thành PixelMap mới
       const croppedMap = await ImageService.cropPixelMap(source, box);
@@ -161,8 +167,8 @@ struct CircleCropPage {
       } else {
         uiRouter.replaceUrl({ url: 'pages/LensResultPage' });
       }
-    } catch (err) {
-      Logger.error('Lỗi khi xử lý vùng khoanh: %{public}s', JSON.stringify(err));
+    } catch (error) {
+      Logger.error('Lỗi khi xử lý vùng khoanh: %{public}s', String(error));
       this.statusHint = 'Xử lý vùng khoanh thất bại, thử lại';
       this.resetStroke();
     } finally {
@@ -175,8 +181,12 @@ struct CircleCropPage {
    */
   private dismissOverlay(): void {
     const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    if (abilityContext) {
-      abilityContext.terminateSelf();
+    try {
+      abilityContext.terminateSelf().catch((error: Error) => {
+        Logger.error('Không thể đóng Circle Lens: %{public}s', error.message);
+      });
+    } catch (error) {
+      Logger.error('Không thể đóng Circle Lens: %{public}s', String(error));
     }
   }
 
@@ -204,9 +214,13 @@ struct CircleCropPage {
               if (this.isProcessing) {
                 return;
               }
+              const finger = event.fingerList[0];
+              if (!finger) {
+                return;
+              }
               this.pathPoints = [];
-              const touchX = event.fingerList[0]?.localX || 0;
-              const touchY = event.fingerList[0]?.localY || 0;
+              const touchX = finger.localX;
+              const touchY = finger.localY;
               this.pathPoints.push({ x: touchX, y: touchY });
 
               this.context.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
@@ -217,8 +231,12 @@ struct CircleCropPage {
               if (this.isProcessing) {
                 return;
               }
-              const touchX = event.fingerList[0]?.localX || 0;
-              const touchY = event.fingerList[0]?.localY || 0;
+              const finger = event.fingerList[0];
+              if (!finger) {
+                return;
+              }
+              const touchX = finger.localX;
+              const touchY = finger.localY;
               this.pathPoints.push({ x: touchX, y: touchY });
 
               // Hiệu ứng nét vẽ phát sáng viền xanh neon phong cách Google Lens

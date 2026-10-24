@@ -3,18 +3,23 @@
  */
 @Component
 export struct LensLoadingView {
-  public loadingText: string = 'Đang phân tích hình ảnh...';
+  @Prop loadingText: string = 'Đang phân tích hình ảnh...';
   @State private rotateAngle: number = 0;
   private timerId: number = -1;
 
   aboutToAppear(): void {
     // Chu kỳ animation quay các vòng hào quang
+    this.stopAnimation();
     this.timerId = setInterval(() => {
       this.rotateAngle = (this.rotateAngle + 10) % 360;
     }, 30);
   }
 
   aboutToDisappear(): void {
+    this.stopAnimation();
+  }
+
+  private stopAnimation(): void {
     if (this.timerId !== -1) {
       clearInterval(this.timerId);
       this.timerId = -1;

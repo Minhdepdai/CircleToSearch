@@ -19,25 +19,32 @@ struct TranslateResultPage {
   @State private translateUrl: string = '';
   @State private errorMessage: string = '';
   private webviewController: webview.WebviewController = new webview.WebviewController();
+  private requestId: number = 0;
 
   private async runTranslate(): Promise<void> {
+    const requestId = ++this.requestId;
     this.isLoading = true;
     this.errorMessage = '';
+    this.translateUrl = '';
 
     const pixelMap = AppStorage.get<image.PixelMap>(Constants.KEY_PENDING_PIXELMAP);
     if (!pixelMap) {
       Logger.error('TranslateResultPage: không tìm thấy PixelMap');
-      this.errorMessage = 'Không có hình ảnh để dịch';
-      this.isLoading = false;
+      if (requestId === this.requestId) {
+        this.errorMessage = 'Không có hình ảnh để dịch';
+        this.isLoading = false;
+      }
       return;
     }
 
     try {
       // 1. OCR on-device
       const text = await OcrService.recognizeText(pixelMap);
+      if (requestId !== this.requestId) {
+        return;
+      }
       if (text === '') {
         this.errorMessage = 'Không nhận diện được văn bản trong vùng đã khoanh';
-        this.isLoading = false;
         return;
       }
       AppStorage.setOrCreate<string>(Constants.KEY_TRANSLATE_TEXT, text);
@@ -48,12 +55,16 @@ struct TranslateResultPage {
 
       // 3. Lưu lịch sử
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      HistoryService.addItem(context, pixelMap, Constants.MODE_TRANSLATE);
-    } catch (err) {
-      Logger.error('TranslateResultPage lỗi: %{public}s', JSON.stringify(err));
-      this.errorMessage = `Xử lý thất bại: ${JSON.stringify(err)}`;
+      await HistoryService.addItem(context, pixelMap, Constants.MODE_TRANSLATE);
+    } catch (error) {
+      Logger.error('TranslateResultPage lỗi: %{public}s', String(error));
+      if (requestId === this.requestId) {
+        this.errorMessage = 'Không thể xử lý nội dung để dịch. Hãy thử lại.';
+      }
     } finally {
-      this.isLoading = false;
+      if (requestId === this.requestId && this.errorMessage !== '') {
+        this.isLoading = false;
+      }
     }
   }
 
@@ -63,8 +74,12 @@ struct TranslateResultPage {
 
   private closePage(): void {
     const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    if (abilityContext) {
-      abilityContext.terminateSelf();
+    try {
+      abilityContext.terminateSelf().catch((error: Error) => {
+        Logger.error('Không thể đóng trang dịch: %{public}s', error.message);
+      });
+    } catch (error) {
+      Logger.error('Không thể đóng trang dịch: %{public}s', String(error));
     }
   }
 
@@ -94,13 +109,19 @@ struct TranslateResultPage {
               this.isLoading = false;
               // Dọn UI Google Translate: ẩn banner mở app
               try {
-                this.webviewController.runJavaScript(Constants.buildCleanupScript());
-              } catch (err) {
-                Logger.warn('Inject cleanup vào Translate thất bại: %{public}s', JSON.stringify(err));
+                this.webviewController.runJavaScript(Constants.buildCleanupScript()).catch((error: Error) => {
+                  Logger.warn('Không thể dọn giao diện Translate: %{public}s', error.message);
+                });
+              } catch (error) {
+                Logger.warn('Không thể dọn giao diện Translate: %{public}s', String(error));
               }
             })
-            .onErrorReceive((event) => {
-              Logger.error('Webview Translate lỗi: %{public}s', event?.error?.getErrorInfo() || '');
+            .onErrorReceive((event: OnErrorReceiveEvent) => {
+              Logger.error('Webview Translate lỗi: %{public}s', event.error.getErrorInfo());
+              if (this.isLoading) {
+                this.errorMessage = 'Không thể tải Google Translate. Hãy thử lại.';
+                this.isLoading = false;
+              }
             })
         }
 

@@ -1,7 +1,6 @@
 import { image } from '@kit.ImageKit';
 import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
-import { promptAction } from '@kit.ArkUI';
 import { Constants } from '../common/Constants';
 import { Logger } from '../common/Logger';
 import { OcrService } from '../services/OcrService';
@@ -19,61 +18,79 @@ struct TextResultPage {
   @State private isLoading: boolean = true;
   @State private ocrText: string = '';
   @State private errorMessage: string = '';
-  private recognizedPixelMap: image.PixelMap | null = null;
+  private requestId: number = 0;
 
   aboutToAppear(): void {
     this.runOcr();
   }
 
   private async runOcr(): Promise<void> {
+    const requestId = ++this.requestId;
     this.isLoading = true;
     this.errorMessage = '';
+    this.ocrText = '';
 
     const pixelMap = AppStorage.get<image.PixelMap>(Constants.KEY_PENDING_PIXELMAP);
     if (!pixelMap) {
       Logger.error('TextResultPage: không tìm thấy PixelMap trong AppStorage');
-      this.errorMessage = 'Không có hình ảnh để nhận diện';
-      this.isLoading = false;
+      if (requestId === this.requestId) {
+        this.errorMessage = 'Không có hình ảnh để nhận diện';
+        this.isLoading = false;
+      }
       return;
     }
-    this.recognizedPixelMap = pixelMap;
 
     try {
       const text = await OcrService.recognizeText(pixelMap);
+      if (requestId !== this.requestId) {
+        return;
+      }
       this.ocrText = text;
       if (text === '') {
         this.errorMessage = 'Không nhận diện được văn bản trong vùng đã khoanh';
       }
       // Lưu vào lịch sử
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      HistoryService.addItem(context, pixelMap, Constants.MODE_OCR);
-    } catch (err) {
-      Logger.error('TextResultPage lỗi OCR: %{public}s', JSON.stringify(err));
-      this.errorMessage = `Nhận diện thất bại: ${JSON.stringify(err)}`;
+      await HistoryService.addItem(context, pixelMap, Constants.MODE_OCR);
+    } catch (error) {
+      Logger.error('TextResultPage lỗi OCR: %{public}s', String(error));
+      if (requestId === this.requestId) {
+        this.errorMessage = 'Nhận diện thất bại. Hãy thử lại với hình ảnh rõ hơn.';
+      }
     } finally {
-      this.isLoading = false;
+      if (requestId === this.requestId) {
+        this.isLoading = false;
+      }
     }
   }
 
   /**
    * Copy toàn bộ text nhận diện được vào clipboard
    */
-  private copyToClipboard(): void {
+  private async copyToClipboard(): Promise<void> {
+    if (this.ocrText === '') {
+      return;
+    }
+
     try {
       const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.ocrText);
       const systemPasteboard = pasteboard.getSystemPasteboard();
-      systemPasteboard.setData(data);
+      await systemPasteboard.setData(data);
       const uiContext = this.getUIContext();
       uiContext.getPromptAction().showToast({ message: 'Đã copy toàn bộ văn bản' });
-    } catch (err) {
-      Logger.error('Copy clipboard thất bại: %{public}s', JSON.stringify(err));
+    } catch (error) {
+      Logger.error('Copy clipboard thất bại: %{public}s', String(error));
     }
   }
 
   private closePage(): void {
     const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    if (abilityContext) {
-      abilityContext.terminateSelf();
+    try {
+      abilityContext.terminateSelf().catch((error: Error) => {
+        Logger.error('Không thể đóng trang OCR: %{public}s', error.message);
+      });
+    } catch (error) {
+      Logger.error('Không thể đóng trang OCR: %{public}s', String(error));
     }
   }
 

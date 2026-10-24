@@ -21,7 +21,7 @@ struct LensResultPage {
   @State private lensUrl: string = '';
   @State private errorMessage: string = '';
   private webviewController: webview.WebviewController = new webview.WebviewController();
-  private uploadedPixelMap: image.PixelMap | null = null;
+  private requestId: number = 0;
 
   aboutToAppear(): void {
     this.startUploadAndSearch();
@@ -31,24 +31,33 @@ struct LensResultPage {
    * Nén ảnh, upload lên Google Lens và nạp URL kết quả
    */
   private async startUploadAndSearch(): Promise<void> {
+    const requestId = ++this.requestId;
     this.isLoading = true;
     this.errorMessage = '';
+    this.lensUrl = '';
 
     const pixelMap = AppStorage.get<image.PixelMap>(Constants.KEY_PENDING_PIXELMAP);
     if (!pixelMap) {
       Logger.error('Không tìm thấy PixelMap trong AppStorage');
-      this.errorMessage = 'Không có hình ảnh để tìm kiếm';
-      this.isLoading = false;
+      if (requestId === this.requestId) {
+        this.errorMessage = 'Không có hình ảnh để tìm kiếm';
+        this.isLoading = false;
+      }
       return;
     }
-    this.uploadedPixelMap = pixelMap;
 
     try {
       // 1. Scale + nén JPEG chất lượng cao
       const jpegBytes = await ImageService.packPixelMapToJpeg(pixelMap, 85);
+      if (requestId !== this.requestId) {
+        return;
+      }
 
       // 2. Upload multipart lên Google Lens, bắt redirect đầu tiên
       const uploadResult: UploadResult = await LensUploadService.uploadToGoogleLens(jpegBytes);
+      if (requestId !== this.requestId) {
+        return;
+      }
 
       if (uploadResult.success && uploadResult.resultUrl) {
         this.lensUrl = uploadResult.resultUrl;
@@ -56,21 +65,28 @@ struct LensResultPage {
 
         // 3. Lưu crop vào lịch sử
         const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-        HistoryService.addItem(context, pixelMap, Constants.MODE_SEARCH);
+        await HistoryService.addItem(context, pixelMap, Constants.MODE_SEARCH);
+        if (requestId !== this.requestId) {
+          return;
+        }
 
         // ArkWeb trong log của thiết bị đang có api level 0 nên không thể đảm bảo
         // Web component hoạt động. Browser hệ thống xử lý trang kết quả ổn định hơn.
-        if (await this.openResultInSystemBrowser()) {
+        if (await this.openResultInSystemBrowser(uploadResult.resultUrl) && requestId === this.requestId) {
           this.isLoading = false;
         }
       } else {
-        this.errorMessage = uploadResult.errorMessage || 'Lỗi không xác định khi upload';
+        if (requestId === this.requestId) {
+          this.errorMessage = uploadResult.errorMessage || 'Lỗi không xác định khi upload';
+          this.isLoading = false;
+        }
+      }
+    } catch (error) {
+      Logger.error('Lỗi quy trình tìm kiếm: %{public}s', String(error));
+      if (requestId === this.requestId) {
+        this.errorMessage = 'Không thể hoàn tất tìm kiếm. Hãy kiểm tra kết nối và thử lại.';
         this.isLoading = false;
       }
-    } catch (err) {
-      Logger.error('Lỗi quy trình tìm kiếm: %{public}s', JSON.stringify(err));
-      this.errorMessage = `Lỗi: ${JSON.stringify(err)}`;
-      this.isLoading = false;
     }
   }
 
@@ -81,24 +97,26 @@ struct LensResultPage {
     Logger.info('Webview đã tải xong, tiêm script dọn dẹp');
     this.isLoading = false;
     try {
-      this.webviewController.runJavaScript(Constants.buildCleanupScript());
-    } catch (err) {
-      Logger.error('Lỗi khi chạy JavaScript trên Webview: %{public}s', JSON.stringify(err));
+      this.webviewController.runJavaScript(Constants.buildCleanupScript()).catch((error: Error) => {
+        Logger.warn('Không thể dọn giao diện Webview: %{public}s', error.message);
+      });
+    } catch (error) {
+      Logger.warn('Không thể dọn giao diện Webview: %{public}s', String(error));
     }
   }
 
   /** Mở kết quả trên browser mặc định; nếu không có handler thì dùng Web fallback. */
-  private async openResultInSystemBrowser(): Promise<boolean> {
+  private async openResultInSystemBrowser(url: string): Promise<boolean> {
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       await context.startAbility({
         action: 'ohos.want.action.viewData',
-        uri: this.lensUrl
+        uri: url
       });
       Logger.info('Đã bàn giao kết quả Google Lens cho browser hệ thống');
       return true;
-    } catch (err) {
-      Logger.warn('Không mở được browser hệ thống, dùng Web nhúng: %{public}s', JSON.stringify(err));
+    } catch (error) {
+      Logger.warn('Không mở được browser hệ thống, dùng Web nhúng: %{public}s', String(error));
       return false;
     }
   }
@@ -108,8 +126,12 @@ struct LensResultPage {
    */
   private closeFloatingResult(): void {
     const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    if (abilityContext) {
-      abilityContext.terminateSelf();
+    try {
+      abilityContext.terminateSelf().catch((error: Error) => {
+        Logger.error('Không thể đóng trang kết quả: %{public}s', error.message);
+      });
+    } catch (error) {
+      Logger.error('Không thể đóng trang kết quả: %{public}s', String(error));
     }
   }
 
@@ -137,8 +159,12 @@ struct LensResultPage {
             .onPageEnd(() => {
               this.onWebPageEnd();
             })
-            .onErrorReceive((event) => {
-              Logger.error('Lỗi Webview: %{public}s', event?.error?.getErrorInfo() || '');
+            .onErrorReceive((event: OnErrorReceiveEvent) => {
+              Logger.error('Lỗi Webview: %{public}s', event.error.getErrorInfo());
+              if (this.isLoading) {
+                this.errorMessage = 'Không thể tải trang kết quả. Hãy thử lại.';
+                this.isLoading = false;
+              }
             })
         }
 

@@ -14,12 +14,19 @@ import { ImageService } from '../services/ImageService';
 struct HistoryPage {
   @State private items: HistoryItem[] = [];
   @State private isLoading: boolean = true;
+  @State private isClearing: boolean = false;
 
   private async reload(): Promise<void> {
     this.isLoading = true;
-    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    this.items = await HistoryService.getItems(context);
-    this.isLoading = false;
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      this.items = await HistoryService.getItems(context);
+    } catch (error) {
+      Logger.error('Không thể tải lịch sử: %{public}s', String(error));
+      this.items = [];
+    } finally {
+      this.isLoading = false;
+    }
   }
 
   aboutToAppear(): void {
@@ -35,18 +42,33 @@ struct HistoryPage {
       AppStorage.setOrCreate<image.PixelMap>(Constants.KEY_PENDING_PIXELMAP, pixelMap);
       AppStorage.setOrCreate<string>(Constants.KEY_IMAGE_SOURCE, Constants.SOURCE_GALLERY);
       this.getUIContext().getRouter().pushUrl({ url: 'pages/CircleCropPage' });
-    } catch (err) {
-      Logger.error('Mở mục lịch sử thất bại: %{public}s', JSON.stringify(err));
-      this.getUIContext().getPromptAction().showToast({ message: 'Không mở được ảnh này' });
+    } catch (error) {
+      Logger.error('Mở mục lịch sử thất bại: %{public}s', String(error));
+      try {
+        this.getUIContext().getPromptAction().showToast({ message: 'Không mở được ảnh này' });
+      } catch (toastError) {
+        Logger.warn('Không thể hiển thị thông báo lỗi: %{public}s', String(toastError));
+      }
       await this.reload();
     }
   }
 
   private async clearHistory(): Promise<void> {
-    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    await HistoryService.clearAll(context);
-    this.getUIContext().getPromptAction().showToast({ message: 'Đã xóa toàn bộ lịch sử' });
-    this.reload();
+    if (this.isClearing) {
+      return;
+    }
+
+    this.isClearing = true;
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      await HistoryService.clearAll(context);
+      this.getUIContext().getPromptAction().showToast({ message: 'Đã xóa toàn bộ lịch sử' });
+      await this.reload();
+    } catch (error) {
+      Logger.error('Xóa lịch sử thất bại: %{public}s', String(error));
+    } finally {
+      this.isClearing = false;
+    }
   }
 
   private modeLabel(mode: string): string {
@@ -103,7 +125,8 @@ struct HistoryPage {
 
         Blank()
 
-        Button('Xóa hết')
+        Button(this.isClearing ? 'Đang xóa...' : 'Xóa hết')
+          .enabled(!this.isClearing)
           .fontSize(13)
           .fontColor('#EA4335')
           .backgroundColor(Color.Transparent)
@@ -143,7 +166,7 @@ struct HistoryPage {
         .justifyContent(FlexAlign.Center)
       } else {
         List({ space: 10 }) {
-          ForEach(this.items, (item: HistoryItem, index: number) => {
+          ForEach(this.items, (item: HistoryItem) => {
             ListItem() {
               Row({ space: 14 }) {
                 Image(item.filePath)
@@ -176,7 +199,7 @@ struct HistoryPage {
                 this.openItem(item);
               })
             }
-          }, (item: HistoryItem, index: number) => `${item.createdAt}_${item.mode}`)
+          }, (item: HistoryItem) => `${item.createdAt}_${item.mode}`)
         }
         .width('92%')
         .layoutWeight(1)

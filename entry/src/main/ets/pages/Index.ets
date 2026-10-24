@@ -16,19 +16,32 @@ struct Index {
   @State private isEnablingShortcut: boolean = false;
 
   private async enableCropShortcut(): Promise<void> {
+    if (this.isEnablingShortcut) {
+      return;
+    }
+
     this.isEnablingShortcut = true;
-    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const published = await CropNotificationService.publish(context);
-    this.isEnablingShortcut = false;
-    this.getUIContext().getPromptAction().showToast({
-      message: published ? 'Đã tạo thông báo Crop. Chạm thông báo để bắt đầu.' : 'Hãy cho phép thông báo để dùng lối tắt này.'
-    });
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const published = await CropNotificationService.publish(context);
+      this.getUIContext().getPromptAction().showToast({
+        message: published ? 'Đã tạo thông báo Crop. Chạm thông báo để bắt đầu.' : 'Hãy cho phép thông báo để dùng lối tắt này.'
+      });
+    } catch (error) {
+      Logger.error('Không thể tạo thông báo Crop: %{public}s', String(error));
+    } finally {
+      this.isEnablingShortcut = false;
+    }
   }
 
   /**
    * Chọn ảnh từ thư viện để thử trải nghiệm khoanh tròn
    */
   private async pickImageAndTest(): Promise<void> {
+    if (this.isPicking) {
+      return;
+    }
+
     this.isPicking = true;
     try {
       const photoSelectOptions = new photoAccessHelper.PhotoSelectOptions();
@@ -38,18 +51,18 @@ struct Index {
       const photoViewPicker = new photoAccessHelper.PhotoViewPicker();
       const photoSelectResult = await photoViewPicker.select(photoSelectOptions);
 
-      if (photoSelectResult && photoSelectResult.photoUris.length > 0) {
-        const uri = photoSelectResult.photoUris[0];
-        Logger.info('Đã chọn ảnh từ thư viện: %{public}s', uri);
-
-        const pixelMap = await ImageService.loadPixelMapFromUri(uri);
-        AppStorage.setOrCreate<image.PixelMap>(Constants.KEY_PENDING_PIXELMAP, pixelMap);
-        AppStorage.setOrCreate<string>(Constants.KEY_IMAGE_SOURCE, Constants.SOURCE_GALLERY);
-
-        this.getUIContext().getRouter().pushUrl({ url: 'pages/CircleCropPage' });
+      const uri: string | undefined = photoSelectResult.photoUris[0];
+      if (!uri) {
+        return;
       }
-    } catch (err) {
-      Logger.error('Lỗi khi chọn ảnh: %{public}s', JSON.stringify(err));
+
+      Logger.info('Đã chọn ảnh từ thư viện: %{public}s', uri);
+      const pixelMap = await ImageService.loadPixelMapFromUri(uri);
+      AppStorage.setOrCreate<image.PixelMap>(Constants.KEY_PENDING_PIXELMAP, pixelMap);
+      AppStorage.setOrCreate<string>(Constants.KEY_IMAGE_SOURCE, Constants.SOURCE_GALLERY);
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/CircleCropPage' });
+    } catch (error) {
+      Logger.error('Lỗi khi chọn ảnh: %{public}s', String(error));
     } finally {
       this.isPicking = false;
     }

@@ -33,7 +33,11 @@ export class ImageService {
       throw new Error(`Không thể nạp ảnh: ${JSON.stringify(err)}`);
     } finally {
       if (file) {
-        fileIo.closeSync(file);
+        try {
+          fileIo.closeSync(file);
+        } catch (error) {
+          Logger.warn('Không thể đóng file ảnh: %{public}s', String(error));
+        }
       }
     }
   }

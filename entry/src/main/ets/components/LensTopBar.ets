@@ -3,7 +3,7 @@
  */
 @Component
 export struct LensTopBar {
-  public title: string = 'Google Lens';
+  @Prop title: string = 'Google Lens';
   public onClose: () => void = () => {};
   public onRefresh: () => void = () => {};
 

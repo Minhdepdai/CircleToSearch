@@ -21,7 +21,12 @@ export class HistoryService {
   private static readonly MAX_ITEMS: number = 20;
 
   private static async openPreferences(context: common.UIAbilityContext): Promise<preferences.Preferences> {
-    return preferences.getPreferencesSync(context, { name: HistoryService.PREF_NAME });
+    try {
+      return preferences.getPreferencesSync(context, { name: HistoryService.PREF_NAME });
+    } catch (error) {
+      Logger.error('Không thể mở kho lưu lịch sử: %{public}s', String(error));
+      throw new Error('Không thể mở kho lưu lịch sử');
+    }
   }
 
   /**
@@ -111,14 +116,15 @@ export class HistoryService {
   }
 
   private static readItems(prefs: preferences.Preferences): HistoryItem[] {
-    const raw = prefs.getSync(HistoryService.KEY_ITEMS, '[]') as string;
     try {
+      const raw = prefs.getSync(HistoryService.KEY_ITEMS, '[]') as string;
       const parsed: object = JSON.parse(raw) as object;
       if (Array.isArray(parsed)) {
         return parsed as HistoryItem[];
       }
       return [];
-    } catch (e) {
+    } catch (error) {
+      Logger.warn('Không thể đọc dữ liệu lịch sử: %{public}s', String(error));
       return [];
     }
   }
